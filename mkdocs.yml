@@ -1,0 +1,65 @@
+site_name: kraft-last-standing
+site_description: Recover an Apache Kafka® KRaft cluster that has permanently lost controller quorum.
+site_url: https://aiven-open.github.io/kraft-last-standing/
+strict: true
+
+repo_name: Aiven-Open/kraft-last-standing
+repo_url: https://github.com/Aiven-Open/kraft-last-standing
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
+  features:
+    - content.code.copy
+    - navigation.instant
+    - navigation.top
+    - navigation.tracking
+    - toc.follow
+
+extra:
+  version:
+    provider: mike
+
+# https://www.mkdocs.org/user-guide/configuration/#validation
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+nav:
+  - Overview: index.md
+  - Usage: usage.md
+  - Runbook: runbook.md
+  - Snapshots ahead of the log: snapshots.md
+
+markdown_extensions:
+  - toc:
+      permalink: true
+  - admonition
+  - github-callouts
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      pygments_lang_class: true
+
+plugins:
+  - mike:
+      alias_type: symlink
+      canonical_version: latest
+  - search

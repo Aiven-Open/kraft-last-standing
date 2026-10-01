@@ -1,0 +1,96 @@
+[build-system]
+requires = [
+  "setuptools==80.9.0",
+  "setuptools-scm==8.3.1",
+  "wheel==0.45.1",
+]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
+version_file = "src/kraft_last_standing/_version.py"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.dynamic]
+readme = {file = "README.md", content-type = "text/markdown; charset=UTF-8"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = false
+
+
+[project]
+name = "kraft-last-standing"
+authors = [
+  { name="Anton Agestam", email="anton.agestam@aiven.io" },
+]
+description = "Recover an Apache Kafka® KRaft cluster that has permanently lost controller quorum."
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.12"
+classifiers = [
+  "Intended Audience :: System Administrators",
+  "Operating System :: POSIX",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Development Status :: 3 - Alpha",
+  "Topic :: Database",
+  "Topic :: System :: Recovery Tools",
+  "Typing :: Typed",
+]
+keywords = [
+  "kafka",
+  "kraft",
+  "raft",
+  "quorum",
+  "disaster-recovery",
+]
+dynamic = ["version", "readme"]
+dependencies = [
+  "kio>=0.6.4",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest",
+  "coverage",
+]
+type-check = [
+  "kraft-last-standing[test]",
+  "mypy",
+]
+docs = [
+  "mkdocs<2",
+  "mkdocs-material",
+  "mike",
+  "markdown-callouts",
+]
+
+[project.scripts]
+kraft-last-standing = "kraft_last_standing.cli:main"
+
+[project.urls]
+"Source Repository" = "https://github.com/Aiven-Open/kraft-last-standing/"
+"Bug Tracker" = "https://github.com/Aiven-Open/kraft-last-standing/issues"
+"Documentation" = "https://aiven-open.github.io/kraft-last-standing/"
+
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "src"]
+addopts = """\
+--doctest-modules \
+-m 'not integration' \
+"""
+filterwarnings = ["error"]
+markers = [
+  "integration: tests that run Apache Kafka® controllers in containers, requires docker",
+]
+
+
+[tool.check-manifest]
+ignore = ["src/kraft_last_standing/_version.py"]
