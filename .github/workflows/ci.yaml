@@ -32,7 +32,7 @@ jobs:
           cache-dependency-path: typing-requirements.txt
           check-latest: true
       - name: mypy cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .mypy_cache
           key: "${{ runner.os }}-mypy-3.14-${{ hashFiles('typing-requirements.txt') }}"
