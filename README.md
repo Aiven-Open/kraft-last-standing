@@ -83,6 +83,14 @@ selects the version of the image, and defaults to 4.3.1.
 $ make test-integration
 ```
 
+To run the tests in parallel, pass the number of workers to pytest-xdist. Each test runs
+four containers that use around 600 MB of memory in total, so pick a number that fits in
+the memory available to Docker.
+
+```shell
+$ make test-integration test="-n 2"
+```
+
 The tests bind mount their temporary directories into the containers. When Docker runs
 in a virtual machine that only shares the home directory, which is the default for
 Colima, point pytest's temporary directory there.

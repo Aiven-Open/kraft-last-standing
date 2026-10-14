@@ -93,7 +93,7 @@ jobs:
       - run: pip install -e '.[test]'
       - name: Pull image
         run: docker pull --quiet "apache/kafka:$KAFKA_VERSION"
-      - run: pytest -m integration --basetemp="$RUNNER_TEMP/pytest"
+      - run: pytest -m integration -n auto --basetemp="$RUNNER_TEMP/pytest"
       - name: Upload container logs and data directories
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7

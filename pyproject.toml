@@ -59,6 +59,7 @@ dependencies = [
 [project.optional-dependencies]
 test = [
   "pytest",
+  "pytest-xdist",
   "coverage",
 ]
 type-check = [
