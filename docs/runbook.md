@@ -229,7 +229,9 @@ once Kafka has deleted the segments that held it. It then writes one `VotersReco
 control batch per voter to remove, at the offsets following the last one, to a new log
 segment named after its first offset, like Kafka names the segments it rolls. Each
 record removes one voter, so every step changes the voter set by a single voter, like
-regular membership changes do.
+regular membership changes do. Before appending, it moves the controller to a newer
+epoch in `quorum-state`, without a leader or vote, so that the controller holds a new
+election when it starts, rather than resuming one from before the recovery.
 
 ### Rolling back
 

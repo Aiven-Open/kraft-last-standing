@@ -90,6 +90,7 @@ Recovery plan
   last offset:        1621
   leader epoch:       5
   snapshot:           00000000000000001600-0000000005.checkpoint
+  file to rewrite:    quorum-state, to epoch 6 without a leader or vote
   current voters:     1, 2, 3
   voter to keep:      1 (directory ID J8aAPcfLQt2bqs1JT_rMgQ)
   voters to remove:   3, 2, in this order
@@ -116,6 +117,14 @@ describes this state in detail.
 Whenever the command deletes or replaces segments, it also deletes
 `leader-epoch-checkpoint`, which would otherwise keep the leader epochs of the deleted
 segments. Kafka rebuilds it from the log on startup.
+
+The command also rewrites `quorum-state`, where Kafka keeps the controller's epoch, the
+leader it knows of, and the candidate it voted for. A controller that voted for itself
+restarts as a candidate in that epoch, and as the only voter, it wins it, even when
+another controller already led it. Nodes that followed the other leader then don't
+follow the recovered controller. To prevent this, the command moves the controller to
+the epoch after the newest one in `quorum-state` and in the log, without a leader or
+vote, so that it holds a new election in a newer epoch when it starts.
 
 ### `--metadata-dir METADATA_DIR`
 

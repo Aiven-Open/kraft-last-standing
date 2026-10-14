@@ -16,11 +16,13 @@ from kraft_last_standing.errors import DirectoryIdMismatch
 from kraft_last_standing.errors import InconsistentLog
 from kraft_last_standing.errors import InsufficientPrivileges
 from kraft_last_standing.errors import InvalidDirectories
+from kraft_last_standing.errors import InvalidQuorumState
 from kraft_last_standing.errors import InvalidSnapshotName
 from kraft_last_standing.errors import MetaPropertiesNotFound
 from kraft_last_standing.errors import NoLogSegments
 from kraft_last_standing.errors import NothingToRecover
 from kraft_last_standing.errors import SegmentChanged
+from kraft_last_standing.errors import SegmentExists
 from kraft_last_standing.errors import VoterNotFound
 from kraft_last_standing.errors import VotersRecordNotFound
 from kraft_last_standing.files import FileAttributes
@@ -34,6 +36,7 @@ from kraft_last_standing.metadata_log import read_batches
 from kraft_last_standing.metadata_log import read_log
 from kraft_last_standing.metadata_log import segment_path
 from kraft_last_standing.metadata_log import summarize
+from kraft_last_standing.quorum_state import encode_unattached
 from kraft_last_standing.recovery import LocalReplica
 from kraft_last_standing.recovery import LogCopy
 from kraft_last_standing.recovery import backup_destination
@@ -48,6 +51,7 @@ from .factories import voters_batch
 from .factories import voters_record
 from .factories import write_controller_log
 from .factories import write_meta_properties
+from .factories import write_quorum_state
 from .factories import write_segment
 from .factories import write_snapshot
 
@@ -118,7 +122,39 @@ class TestPlanRecovery:
         assert not plan.new_segment_exists
         assert plan.incomplete_batch is None
         assert plan.leader_epoch_checkpoint is None
+        assert plan.quorum_state_epoch == 4
         assert plan.file_attributes == FileAttributes.of(tail)
+
+    @pytest.mark.parametrize(
+        ("quorum_state_epoch", "expected"),
+        [
+            pytest.param(7, 8, id="quorum-state-ahead-of-log"),
+            pytest.param(3, 4, id="same-epoch"),
+            pytest.param(2, 4, id="log-ahead-of-quorum-state"),
+        ],
+    )
+    def test_plans_epoch_after_newest_known_one(
+        self,
+        metadata_dir: Path,
+        quorum_state_epoch: int,
+        expected: int,
+    ) -> None:
+        write_quorum_state(metadata_dir, epoch=quorum_state_epoch, voted_id=1)
+        plan = plan_recovery(
+            metadata_dir=metadata_dir,
+            local_replica=replica(1),
+            copy_from=None,
+        )
+        assert plan.quorum_state_epoch == expected
+
+    def test_raises_invalid_quorum_state(self, metadata_dir: Path) -> None:
+        (metadata_dir / "quorum-state").write_text("{}")
+        with pytest.raises(InvalidQuorumState):
+            plan_recovery(
+                metadata_dir=metadata_dir,
+                local_replica=replica(1),
+                copy_from=None,
+            )
 
     def test_plans_truncation_of_incomplete_batch(self, metadata_dir: Path) -> None:
         tail = segment_path(metadata_dir, 4)
@@ -291,6 +327,7 @@ class TestPlanRecoveryCopyingLog:
         assert plan.snapshot is None
         assert plan.new_segment == segment_path(metadata_dir, 15)
         assert plan.leader_epoch_checkpoint == checkpoint
+        assert plan.quorum_state_epoch == 5
         assert plan.file_attributes == FileAttributes.of(target_tail)
 
     def test_plans_from_copied_snapshot(
@@ -466,7 +503,7 @@ class TestExecuteRecovery:
     ) -> None:
         segment_path(metadata_dir, 0).chmod(0o640)
         segment_path(metadata_dir, 4).chmod(0o640)
-        (metadata_dir / "quorum-state").write_text("{}")
+        quorum_state = write_quorum_state(metadata_dir, epoch=3, voted_id=1)
         (metadata_dir / "leader-epoch-checkpoint").write_text("0\n1\n3 0\n")
         original = _snapshot(metadata_dir)
         plan = plan_recovery(
@@ -484,8 +521,10 @@ class TestExecuteRecovery:
         assert _snapshot(metadata_dir) == {
             **original,
             "00000000000000000010.log": plan.new_segment.read_bytes(),
+            "quorum-state": encode_unattached(4),
         }
         assert stat.S_IMODE(plan.new_segment.stat().st_mode) == 0o640
+        assert stat.S_IMODE(quorum_state.stat().st_mode) == 0o640
 
         new_segment = plan.new_segment.read_bytes()
         first, first_size = read_batch(new_segment, 0)
@@ -519,7 +558,9 @@ class TestExecuteRecovery:
         execute_recovery(plan, tmp_path / "backup", NOW)
 
         assert _snapshot(tmp_path / "backup" / "__cluster_metadata-0") == original
-        assert sorted(path.name for path in metadata_dir.iterdir()) == sorted(original)
+        assert sorted(path.name for path in metadata_dir.iterdir()) == sorted(
+            [*original, "quorum-state"]
+        )
         assert stat.S_IMODE(empty.stat().st_mode) == 0o640
         assert read_log(metadata_dir) == EffectiveLog(
             end=LogEnd(last_offset=i64(29), partition_leader_epoch=i32(5)),
@@ -551,6 +592,7 @@ class TestExecuteRecovery:
         assert sorted(path.name for path in metadata_dir.iterdir()) == [
             "00000000000000000028-0000000005.checkpoint",
             "00000000000000000028.log",
+            "quorum-state",
         ]
         assert stat.S_IMODE(plan.new_segment.stat().st_mode) == 0o640
         assert read_log(metadata_dir) == EffectiveLog(
@@ -592,6 +634,7 @@ class TestExecuteRecovery:
             "00000000000000000004.index",
             "00000000000000000028-0000000005.checkpoint",
             "00000000000000000028.log",
+            "quorum-state",
         ]
         copied = metadata_dir / source_snapshot.name
         assert copied.read_bytes() == source_snapshot.read_bytes()
@@ -636,6 +679,7 @@ class TestExecuteRecovery:
             "00000000000000000000.log",
             "00000000000000000004.index",
             "00000000000000000020.log",
+            "quorum-state",
         ]
         copied = segment_path(metadata_dir, 0)
         assert copied.read_bytes() == source_segment.read_bytes()
@@ -724,6 +768,7 @@ class TestExecuteRecovery:
         assert sorted(path.name for path in metadata_dir.iterdir()) == [
             "00000000000000000028-0000000005.checkpoint",
             "00000000000000000028.log",
+            "quorum-state",
         ]
         assert read_log(metadata_dir) == EffectiveLog(
             end=LogEnd(last_offset=i64(29), partition_leader_epoch=i32(5)),
@@ -758,6 +803,24 @@ class TestExecuteRecovery:
             execute_recovery(plan, tmp_path / "backup", NOW)
 
         assert _snapshot(metadata_dir) == changed
+
+    def test_writes_quorum_state_before_appending(
+        self,
+        tmp_path: Path,
+        metadata_dir: Path,
+    ) -> None:
+        quorum_state = write_quorum_state(metadata_dir, epoch=3, voted_id=1)
+        plan = plan_recovery(
+            metadata_dir=metadata_dir,
+            local_replica=replica(1),
+            copy_from=None,
+        )
+        plan.new_segment.write_bytes(data_batch(offset=10, epoch=3))
+
+        with pytest.raises(SegmentExists):
+            execute_recovery(plan, tmp_path / "backup", NOW)
+
+        assert quorum_state.read_bytes() == encode_unattached(4)
 
     def test_leaves_incomplete_batch_out_of_copy(
         self,

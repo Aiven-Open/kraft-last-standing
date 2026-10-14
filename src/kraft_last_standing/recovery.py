@@ -33,6 +33,7 @@ from .files import can_apply
 from .files import copy_new_file
 from .files import fill_empty_file
 from .files import fsync_directory
+from .files import replace_file
 from .files import truncate_file
 from .files import write_new_file
 from .meta_properties import read_meta_properties
@@ -52,6 +53,9 @@ from .metadata_log import read_log
 from .metadata_log import resolve_log
 from .metadata_log import segment_path
 from .metadata_log import select_snapshot
+from .quorum_state import encode_unattached
+from .quorum_state import quorum_state_path
+from .quorum_state import read_quorum_state_epoch
 
 LOG: Final = logging.getLogger(__name__)
 
@@ -115,6 +119,8 @@ class RecoveryPlan:
     new_segment_exists: bool
     # Kafka's leader epoch cache, deleted before segments are deleted or replaced.
     leader_epoch_checkpoint: Path | None
+    # The epoch to write to quorum-state, without a leader or vote, before appending.
+    quorum_state_epoch: int
     file_attributes: FileAttributes
 
     @property
@@ -169,6 +175,18 @@ def _leader_epoch_checkpoint(metadata_dir: Path) -> Path | None:
     # https://github.com/apache/kafka/blob/26b251a451ce941d3d7a55e6487bcb7f16b5ad48/server-common/src/main/java/org/apache/kafka/server/common/CheckpointFile.java#L64-L69
     path = metadata_dir / "leader-epoch-checkpoint"
     return path if path.exists() else None
+
+
+def _quorum_state_epoch(metadata_dir: Path, log_end: LogEnd) -> int:
+    # A controller that voted for itself restarts as a candidate in the same epoch, and
+    # as the only voter, it wins that epoch, even when another controller already led
+    # it. Moving to a newer epoch is the only way to drop the vote without voting twice
+    # in one epoch, and makes the controller start a new election.
+    # https://github.com/apache/kafka/blob/26b251a451ce941d3d7a55e6487bcb7f16b5ad48/raft/src/main/java/org/apache/kafka/raft/QuorumState.java#L190-L203
+    # https://github.com/apache/kafka/blob/26b251a451ce941d3d7a55e6487bcb7f16b5ad48/raft/src/main/java/org/apache/kafka/raft/KafkaRaftClient.java#L567-L573
+    return (
+        max(read_quorum_state_epoch(metadata_dir), log_end.partition_leader_epoch) + 1
+    )
 
 
 def _verify_directory_id(voter: Voter, local_replica: LocalReplica) -> None:
@@ -245,6 +263,7 @@ def plan_recovery(
             if log_copy is not None or log.superseded
             else None
         ),
+        quorum_state_epoch=_quorum_state_epoch(metadata_dir, log.end),
         file_attributes=file_attributes,
     )
 
@@ -357,6 +376,20 @@ def execute_recovery(
             plan.file_attributes,
         )
     fsync_directory(plan.metadata_dir)
+
+    # Before appending, so that the controller never restarts as the only voter in an
+    # epoch that it voted in.
+    quorum_state = quorum_state_path(plan.metadata_dir)
+    LOG.info(
+        "Writing epoch %d, without a leader or vote, to %s",
+        plan.quorum_state_epoch,
+        quorum_state,
+    )
+    replace_file(
+        quorum_state,
+        encode_unattached(plan.quorum_state_epoch),
+        plan.file_attributes,
+    )
 
     # Kafka record timestamps have millisecond precision, truncating to whole seconds
     # keeps the conversion exact.

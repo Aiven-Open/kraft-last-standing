@@ -1,4 +1,5 @@
 import itertools
+import json
 
 from collections.abc import Iterable
 from collections.abc import Iterator
@@ -10,11 +11,15 @@ import pytest
 from kraft_last_standing import cli
 from kraft_last_standing.errors import CorruptBatch
 from kraft_last_standing.files import FileAttributes
+from kraft_last_standing.meta_properties import format_kafka_uuid
+from kraft_last_standing.meta_properties import read_meta_properties
 from kraft_last_standing.metadata_log import list_segments
 from kraft_last_standing.metadata_log import read_batches
 from kraft_last_standing.metadata_log import summarize
 from kraft_last_standing.probe import most_progressed_first
 from kraft_last_standing.probe import probe
+from kraft_last_standing.quorum_state import quorum_state_path
+from kraft_last_standing.quorum_state import read_quorum_state_epoch
 
 from .cluster import Cluster
 from .cluster import Node
@@ -104,6 +109,43 @@ def test_recover_last_standing(running_cluster: Cluster, tmp_path: Path) -> None
         voters={survivor.node_id, cluster.observer.node_id},
         observers=set(),
     )
+
+
+def _vote_for_itself(node: Node) -> int:
+    """
+    Make the stopped node's quorum-state record a vote for itself in its epoch, like a
+    candidate that lost the election, or never learned its outcome. Returns the epoch.
+    """
+    epoch = read_quorum_state_epoch(node.metadata_dir)
+    directory_id = read_meta_properties(node.log_dir).directory_id
+    quorum_state_path(node.metadata_dir).write_text(
+        json.dumps(
+            {
+                "leaderId": -1,
+                "leaderEpoch": epoch,
+                "votedId": node.node_id,
+                "votedDirectoryId": format_kafka_uuid(directory_id),
+                "data_version": 1,
+            }
+        )
+    )
+    return epoch
+
+
+def test_recover_voter_that_voted_for_itself(
+    running_cluster: Cluster,
+    tmp_path: Path,
+) -> None:
+    cluster = running_cluster
+    kill(*cluster.voters)
+    survivor = _most_progressed(cluster.voters)
+    epoch = _vote_for_itself(survivor)
+
+    _recover(survivor, tmp_path / "backup")
+
+    start(survivor)
+    quorum = wait_for_quorum([survivor], voters={survivor.node_id}, observers={3})
+    assert quorum.leader_epoch > epoch
 
 
 def test_lagging_observer_does_not_skip_records(

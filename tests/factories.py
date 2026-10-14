@@ -1,5 +1,6 @@
 import datetime
 import io
+import json
 import uuid
 
 from pathlib import Path
@@ -183,6 +184,25 @@ def write_meta_properties(
         f"node.id={node_id}\n"
         "version=1\n"
     )
+
+
+def write_quorum_state(metadata_dir: Path, epoch: int, voted_id: int) -> Path:
+    """
+    Write the election state of a candidate, which voted for ``voted_id`` in ``epoch``.
+    """
+    path = metadata_dir / "quorum-state"
+    path.write_text(
+        json.dumps(
+            {
+                "leaderId": -1,
+                "leaderEpoch": epoch,
+                "votedId": voted_id,
+                "votedDirectoryId": format_kafka_uuid(directory_id(voted_id)),
+                "data_version": 1,
+            }
+        )
+    )
+    return path
 
 
 def write_controller_log(metadata_dir: Path) -> None:

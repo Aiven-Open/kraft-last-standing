@@ -324,6 +324,10 @@ def format_plan(plan: RecoveryPlan, backup_path: Path) -> str:
         *superseded_rows,
         *incomplete_rows,
         *checkpoint_rows,
+        (
+            "file to rewrite",
+            f"quorum-state, to epoch {plan.quorum_state_epoch} without a leader or vote",
+        ),
         ("current voters", _format_ids(v.voter_id for v in plan.current_voters.voters)),
         ("voter to keep", f"{kept_voter.voter_id} (directory ID {directory_id})"),
         ("voters to remove", f"{_format_ids(plan.removed_voter_ids)}, in this order"),

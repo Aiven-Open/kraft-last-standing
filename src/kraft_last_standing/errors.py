@@ -20,6 +20,11 @@ class InvalidMetaProperties(KRaftLastStandingError):
         super().__init__(f"Failed parsing {path}: {reason}")
 
 
+class InvalidQuorumState(KRaftLastStandingError):
+    def __init__(self, path: Path) -> None:
+        super().__init__(f"Failed reading the leader epoch from {path}.")
+
+
 class InvalidSegmentName(KRaftLastStandingError):
     def __init__(self, path: Path) -> None:
         super().__init__(

@@ -88,6 +88,22 @@ def write_new_file(
     _create_new_file(path, attributes, lambda file: file.write(content))
 
 
+def replace_file(
+    path: Path,
+    content: bytes,
+    attributes: FileAttributes,
+) -> None:
+    """
+    Replace ``path``, or create it, by renaming a complete temporary file to it, so that
+    the file has either its old content or its new content, never a partial one.
+    """
+    temporary = path.with_name(f"{path.name}.tmp")
+    temporary.unlink(missing_ok=True)
+    write_new_file(temporary, content, attributes)
+    temporary.replace(path)
+    fsync_directory(path.parent)
+
+
 def copy_new_file(
     source: Path,
     destination: Path,

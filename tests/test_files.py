@@ -11,6 +11,7 @@ from kraft_last_standing.files import FileAttributes
 from kraft_last_standing.files import can_apply
 from kraft_last_standing.files import copy_new_file
 from kraft_last_standing.files import fill_empty_file
+from kraft_last_standing.files import replace_file
 from kraft_last_standing.files import truncate_file
 from kraft_last_standing.files import write_new_file
 
@@ -80,6 +81,45 @@ class TestWriteNewFile:
         with pytest.raises(PermissionError):
             write_new_file(path, b"content", attributes)
         assert not path.exists()
+
+
+class TestReplaceFile:
+    def test_replaces_content_and_attributes(self, tmp_path: Path) -> None:
+        path = tmp_path / "file"
+        path.write_bytes(b"existing content")
+        path.chmod(0o600)
+        replace_file(path, b"content", own(0o640))
+        assert path.read_bytes() == b"content"
+        assert stat.S_IMODE(path.stat().st_mode) == 0o640
+        assert sorted(tmp_path.iterdir()) == [path]
+
+    def test_creates_missing_file(self, tmp_path: Path) -> None:
+        path = tmp_path / "file"
+        replace_file(path, b"content", own(0o644))
+        assert path.read_bytes() == b"content"
+
+    def test_replaces_leftover_temporary_file(self, tmp_path: Path) -> None:
+        path = tmp_path / "file"
+        (tmp_path / "file.tmp").write_bytes(b"leftover")
+        replace_file(path, b"content", own(0o644))
+        assert path.read_bytes() == b"content"
+        assert sorted(tmp_path.iterdir()) == [path]
+
+    def test_keeps_file_when_writing_fails(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def fail(descriptor: int) -> None:
+            raise OSError("fsync failed")
+
+        path = tmp_path / "file"
+        path.write_bytes(b"existing")
+        monkeypatch.setattr(os, "fsync", fail)
+        with pytest.raises(OSError, match="fsync failed"):
+            replace_file(path, b"content", own(0o644))
+        assert path.read_bytes() == b"existing"
+        assert sorted(tmp_path.iterdir()) == [path]
 
 
 class TestCopyNewFile:
