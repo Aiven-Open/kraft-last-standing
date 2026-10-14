@@ -957,7 +957,9 @@ once Kafka has deleted the segments that held it. It then writes one <code>Voter
 control batch per voter to remove, at the offsets following the last one, to a new log
 segment named after its first offset, like Kafka names the segments it rolls. Each
 record removes one voter, so every step changes the voter set by a single voter, like
-regular membership changes do.</p>
+regular membership changes do. Before appending, it moves the controller to a newer
+epoch in <code>quorum-state</code>, without a leader or vote, so that the controller holds a new
+election when it starts, rather than resuming one from before the recovery.</p>
 <h3 id="rolling-back">Rolling back<a class="headerlink" href="#rolling-back" title="Permanent link">&para;</a></h3>
 <p>The backup made by <code>recover</code> is a directory holding a copy of the metadata directory as
 it was before recovery, such as
