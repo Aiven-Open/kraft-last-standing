@@ -1,6 +1,8 @@
 import itertools
 
+from collections.abc import Iterable
 from collections.abc import Iterator
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -11,6 +13,7 @@ from kraft_last_standing.files import FileAttributes
 from kraft_last_standing.metadata_log import list_segments
 from kraft_last_standing.metadata_log import read_batches
 from kraft_last_standing.metadata_log import summarize
+from kraft_last_standing.probe import most_progressed_first
 from kraft_last_standing.probe import probe
 
 from .cluster import Cluster
@@ -62,20 +65,32 @@ def _assert_consistent_attributes(metadata_dir: Path) -> None:
     assert len({FileAttributes.of(segment.path) for segment in segments}) == 1
 
 
+def _most_progressed(nodes: Iterable[Node]) -> Node:
+    # Recovering from a less progressed copy than the running observer's makes the new
+    # leader ask the observer to truncate below its high watermark, which is fatal.
+    return min(nodes, key=lambda node: most_progressed_first(probe(node.metadata_dir)))
+
+
 def test_recover_last_standing(running_cluster: Cluster, tmp_path: Path) -> None:
     cluster = running_cluster
-    survivor = cluster.voters[0]
     wait_until(
-        "the log to span several segments",
-        lambda: True if len(list_segments(survivor.metadata_dir)) > 1 else None,
+        "the logs to span several segments",
+        lambda: (
+            True
+            if all(
+                len(list_segments(voter.metadata_dir)) > 1 for voter in cluster.voters
+            )
+            else None
+        ),
     )
     kill(*cluster.voters)
+    survivor = _most_progressed(cluster.voters)
 
     _recover(survivor, tmp_path / "backup")
 
     _assert_consistent_attributes(survivor.metadata_dir)
     start(survivor)
-    quorum = wait_for_quorum([survivor], voters={0}, observers={3})
+    quorum = wait_for_quorum([survivor], voters={survivor.node_id}, observers={3})
 
     [observer] = quorum.observers
     add_voter(
@@ -84,7 +99,11 @@ def test_recover_last_standing(running_cluster: Cluster, tmp_path: Path) -> None
         node=cluster.observer,
         directory_id=observer.replica_directory_id,
     )
-    wait_for_quorum([survivor, cluster.observer], voters={0, 3}, observers=set())
+    wait_for_quorum(
+        [survivor, cluster.observer],
+        voters={survivor.node_id, cluster.observer.node_id},
+        observers=set(),
+    )
 
 
 def test_lagging_observer_does_not_skip_records(
@@ -92,7 +111,6 @@ def test_lagging_observer_does_not_skip_records(
     tmp_path: Path,
 ) -> None:
     cluster = running_cluster
-    survivor = cluster.voters[0]
     stop(cluster.observer)
     observer_last_offset = _last_offset(cluster.observer.metadata_dir)
 
@@ -106,6 +124,7 @@ def test_lagging_observer_does_not_skip_records(
 
     wait_until("voters to move ahead of the observer", voters_ahead)
     kill(*cluster.voters)
+    survivor = _most_progressed(cluster.voters)
     _recover(survivor, tmp_path / "backup")
     recovered_last_offset = _last_offset(survivor.metadata_dir)
 
@@ -133,7 +152,7 @@ def test_lagging_observer_does_not_skip_records(
     summary = summarize(batches)
     assert summary is not None
     assert summary.voters is not None
-    assert [voter.voter_id for voter in summary.voters.voters] == [0]
+    assert [voter.voter_id for voter in summary.voters.voters] == [survivor.node_id]
 
 
 def test_recover_with_copied_log(running_cluster: Cluster, tmp_path: Path) -> None:
@@ -155,16 +174,29 @@ def test_recover_with_copied_log(running_cluster: Cluster, tmp_path: Path) -> No
     wait_for_quorum([survivor], voters={0}, observers={3})
 
 
-def _voters_only_in_snapshot(metadata_dir: Path) -> bool | None:
+def _voters_only_in_snapshot(metadata_dir: Path) -> bool:
     try:
         segments = list_segments(metadata_dir)
         summary = summarize(read_batches(segments))
     except (CorruptBatch, FileNotFoundError):
         # Read while Kafka appends to, or deletes, a segment.
-        return None
+        return False
     if not segments or segments[0].base_offset == 0:
-        return None
-    return True if summary is not None and summary.voters is None else None
+        return False
+    return summary is not None and summary.voters is None
+
+
+def _wait_for_voters_only_in_snapshots(nodes: Sequence[Node]) -> None:
+    # Kafka deletes segments behind snapshots once a minute, a hard-coded interval.
+    wait_until(
+        "segments holding the voter set to be deleted",
+        lambda: (
+            True
+            if all(_voters_only_in_snapshot(node.metadata_dir) for node in nodes)
+            else None
+        ),
+        timeout=180,
+    )
 
 
 def test_recover_with_voters_only_in_snapshot(
@@ -172,14 +204,9 @@ def test_recover_with_voters_only_in_snapshot(
     tmp_path: Path,
 ) -> None:
     cluster = running_cluster
-    survivor = cluster.voters[0]
-    # Kafka deletes segments behind snapshots once a minute, a hard-coded interval.
-    wait_until(
-        "segments holding the voter set to be deleted",
-        lambda: _voters_only_in_snapshot(survivor.metadata_dir),
-        timeout=180,
-    )
+    _wait_for_voters_only_in_snapshots(cluster.voters)
     kill(*cluster.voters)
+    survivor = _most_progressed(cluster.voters)
     result = probe(survivor.metadata_dir)
     assert result.snapshot is not None
     assert result.voter_ids == (0, 1, 2)
@@ -188,7 +215,7 @@ def test_recover_with_voters_only_in_snapshot(
 
     _assert_consistent_attributes(survivor.metadata_dir)
     start(survivor)
-    wait_for_quorum([survivor], voters={0}, observers={3})
+    wait_for_quorum([survivor], voters={survivor.node_id}, observers={3})
 
 
 def test_recover_with_copied_snapshot(
@@ -196,13 +223,10 @@ def test_recover_with_copied_snapshot(
     tmp_path: Path,
 ) -> None:
     cluster = running_cluster
-    survivor, source, _ = cluster.voters
-    wait_until(
-        "segments holding the voter set to be deleted",
-        lambda: _voters_only_in_snapshot(source.metadata_dir),
-        timeout=180,
-    )
+    _wait_for_voters_only_in_snapshots(cluster.voters)
     kill(*cluster.voters)
+    source = _most_progressed(cluster.voters)
+    survivor = next(voter for voter in cluster.voters if voter != source)
 
     _recover(
         survivor,
@@ -212,4 +236,4 @@ def test_recover_with_copied_snapshot(
 
     _assert_consistent_attributes(survivor.metadata_dir)
     start(survivor)
-    wait_for_quorum([survivor], voters={0}, observers={3})
+    wait_for_quorum([survivor], voters={survivor.node_id}, observers={3})
